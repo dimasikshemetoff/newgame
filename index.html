@@ -1,0 +1,1720 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2.5D Сборщик Фруктов</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #gameCanvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        #ui {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 100;
+        }
+        #instructions {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            color: white;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 100;
+            font-size: 14px;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-content {
+            background-color: #333;
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            max-width: 500px;
+        }
+        .modal h2 {
+            margin-bottom: 15px;
+            color: #ff5555;
+        }
+        .modal p {
+            margin-bottom: 20px;
+            font-size: 18px;
+        }
+        .modal button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        .modal button:hover {
+            background-color: #45a049;
+        }
+        #notification {
+            position: fixed;
+            top: 20%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 24px;
+            z-index: 200;
+            display: none;
+            text-align: center;
+            max-width: 80%;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="ui">
+        <div>Комната: <span id="roomNumber">1</span></div>
+        <div>Фрукты: <span id="collectedFruits">0</span>/<span id="requiredFruits">5</span></div>
+        <div>Время: <span id="timeLeft">60</span>с</div>
+    </div>
+    <div id="instructions">
+        WASD - Движение | Мышь - Поворот камеры | Пробел - Прыжок | Колесико - Масштаб | Собери фрукты, чтобы открыть ворота
+    </div>
+    
+    <!-- Game Over Modal -->
+    <div id="gameOverModal" class="modal">
+        <div class="modal-content">
+            <h2>Игра окончена!</h2>
+            <p id="gameOverMessage">Вы коснулись шипов и потеряли весь прогресс!</p>
+            <button id="restartButton">Начать заново</button>
+        </div>
+    </div>
+    
+    <!-- Notification -->
+    <div id="notification"></div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Настройка сцены
+        const scene = new THREE.Scene();
+        
+        // Загрузка текстуры неба
+        const textureLoader = new THREE.TextureLoader();
+        textureLoader.load('sky.jpg', function(texture) {
+            scene.background = texture;
+        }, undefined, function(error) {
+            console.error('Ошибка загрузки sky.jpg:', error);
+            // Резервный цвет неба в случае ошибки загрузки
+            scene.background = new THREE.Color(0x87CEEB); 
+        });
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gameCanvas'), antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Улучшенные тени
+
+        // Обработка ресайза
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Освещение
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(10, 20, 15);
+        directionalLight.castShadow = true;
+        // Улучшенные настройки теней
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 50;
+        directionalLight.shadow.camera.left = -20;
+        directionalLight.shadow.camera.right = 20;
+        directionalLight.shadow.camera.top = 20;
+        directionalLight.shadow.camera.bottom = -20;
+        scene.add(directionalLight);
+
+        // Позиция камеры
+        camera.position.set(0, 8, 12);
+        camera.lookAt(0, 0, 0);
+
+        // Загрузчик текстуры
+        // textureLoader уже создан выше
+        
+        // Создание разноцветной текстуры для мяча
+        function createRainbowTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 256;
+            const context = canvas.getContext('2d');
+            
+            // Создаем градиентную текстуру
+            const gradient = context.createLinearGradient(0, 0, canvas.width, canvas.height);
+            gradient.addColorStop(0, '#ff0000');
+            gradient.addColorStop(0.17, '#ff9900');
+            gradient.addColorStop(0.33, '#ffff00');
+            gradient.addColorStop(0.5, '#00ff00');
+            gradient.addColorStop(0.67, '#00ffff');
+            gradient.addColorStop(0.83, '#0000ff');
+            gradient.addColorStop(1, '#9900ff');
+            
+            context.fillStyle = gradient;
+            context.fillRect(0, 0, canvas.width, canvas.height);
+            
+            return new THREE.CanvasTexture(canvas);
+        }
+        
+        // Игрок (разноцветный шарик)
+        let playerRadius = 0.5;
+        const playerGeometry = new THREE.SphereGeometry(playerRadius, 32, 32);
+        const playerMaterial = new THREE.MeshStandardMaterial({ 
+            map: createRainbowTexture(),
+            flatShading: false,
+            roughness: 0.3,
+            metalness: 0.2
+        });
+        let player = new THREE.Mesh(playerGeometry, playerMaterial);
+        player.position.set(0, playerRadius, 0);
+        player.castShadow = true;
+        scene.add(player);
+        
+        // Инерция движения
+        const velocity = new THREE.Vector3();
+        const acceleration = 0.02;
+        const friction = 0.92;
+        let maxSpeed = 0.2;
+        const bounceForce = 0.5;
+        
+        // Прыжки и гравитация
+        const gravity = -0.01;
+        let jumpVelocity = 0.2;
+        let isJumping = false;
+        let verticalVelocity = 0;
+        
+        // Двойной прыжок
+        let jumpCount = 1;
+        const maxJumps = 2;
+        
+        // Управление клавиатурой
+        const keys = {};
+        document.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+            
+            // Прыжок по пробелу
+            if (e.key === ' ' && jumpCount > 0) {
+                verticalVelocity = jumpVelocity;
+                isJumping = true;
+                jumpCount--;
+                
+                // Воспроизводим звук прыжка
+                if (sounds.jump) {
+                    playSound(sounds.jump);
+                }
+            }
+        });
+        document.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+
+        // Управление камерой мышью
+        let mouseX = 0;
+        let mouseY = 0;
+        let isMouseLocked = false;
+        let cameraDistance = 10;
+        let cameraHeight = 8;
+        
+        document.addEventListener('click', () => {
+            document.body.requestPointerLock();
+        });
+        
+        document.addEventListener('pointerlockchange', () => {
+            isMouseLocked = document.pointerLockElement === document.body;
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+            if (!isMouseLocked) return;
+            
+            mouseX += e.movementX * 0.002;  // Изменено на минус для инверсии по горизонтали
+            mouseY += e.movementY * 0.002;  // Изменено на плюс для инверсии по вертикали
+            
+            // Ограничиваем угол вращения по вертикали
+            mouseY = Math.max(-Math.PI/3, Math.min(Math.PI/6, mouseY));
+        });
+        
+        // Управление колесиком мыши для приближения/отдаления
+        document.addEventListener('wheel', (e) => {
+            if (!isMouseLocked) return;
+            
+            // Изменяем расстояние камеры
+            cameraDistance += e.deltaY * 0.01;
+            
+            // Ограничиваем минимальное и максимальное расстояние
+            cameraDistance = Math.max(5, Math.min(20, cameraDistance));
+        });
+
+        // Звуковая система
+        let audioContext;
+        const sounds = {};
+
+        // Инициализация AudioContext
+        function initAudio() {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
+        // Загрузка звука
+        function loadSound(url) {
+            return new Promise((resolve, reject) => {
+                const request = new XMLHttpRequest();
+                request.open('GET', url, true);
+                request.responseType = 'arraybuffer';
+                request.onload = function() {
+                    audioContext.decodeAudioData(request.response, function(buffer) {
+                        resolve(buffer);
+                    }, function(e) {
+                        reject(e);
+                    });
+                };
+                request.onerror = reject;
+                request.send();
+            });
+        }
+
+        // Воспроизведение звука
+        function playSound(buffer) {
+            if (!audioContext || !buffer) return;
+            
+            const source = audioContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioContext.destination);
+            source.start(0);
+        }
+
+        // Загрузка всех звуков
+        async function loadAllSounds() {
+            try {
+                // В реальном приложении укажите правильные пути к файлам
+                sounds.collect = await loadSound('collect.mp3');
+                sounds.jump = await loadSound('jump.mp3');
+                sounds.open = await loadSound('open.mp3');
+                sounds.spike = await loadSound('spike.mp3');
+                sounds.upgrade = await loadSound('upgrade.mp3');
+                console.log('All sounds loaded successfully');
+            } catch (e) {
+                console.error('Error loading sounds:', e);
+            }
+        }
+
+        // Инициализация звука при загрузке страницы
+        initAudio();
+        loadAllSounds();
+
+        // Возобновление AudioContext после первого взаимодействия
+        document.addEventListener('click', function() {
+            if (audioContext && audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+        }, { once: true });
+
+        function updatePlayer() {
+            // Получаем направление взгляда камеры
+            const cameraDirection = new THREE.Vector3();
+            camera.getWorldDirection(cameraDirection);
+            
+            // Проекция на горизонтальную плоскость
+            cameraDirection.y = 0;
+            cameraDirection.normalize();
+            
+            // Вычисляем перпендикулярное направление (вправо)
+            const rightDirection = new THREE.Vector3().crossVectors(cameraDirection, new THREE.Vector3(0, 1, 0)).normalize();
+            
+            // Вычисляем направление движения
+            const moveDirection = new THREE.Vector3();
+            
+            if (keys['w']) {
+                moveDirection.add(cameraDirection);
+            }
+            if (keys['s']) {
+                moveDirection.sub(cameraDirection);
+            }
+            if (keys['a']) {
+                moveDirection.sub(rightDirection);
+            }
+            if (keys['d']) {
+                moveDirection.add(rightDirection);
+            }
+            if (keys['ц']) {
+                moveDirection.add(cameraDirection);
+            }
+            if (keys['ы']) {
+                moveDirection.sub(cameraDirection);
+            }
+            if (keys['ф']) {
+                moveDirection.sub(rightDirection);
+            }
+            if (keys['в']) {
+                moveDirection.add(rightDirection);
+            }
+            
+            // Применяем ускорение в направлении движения
+            if (moveDirection.length() > 0) {
+                moveDirection.normalize();
+                velocity.add(moveDirection.multiplyScalar(acceleration));
+            }
+            
+            // Применяем трение
+            velocity.multiplyScalar(friction);
+            
+            // Ограничиваем максимальную скорость
+            if (velocity.length() > maxSpeed) {
+                velocity.normalize().multiplyScalar(maxSpeed);
+            }
+            
+            // Применяем движение по горизонтали
+            player.position.add(velocity);
+            
+            // Применяем гравитацию и вертикальное движение
+            verticalVelocity += gravity;
+            player.position.y += verticalVelocity;
+            
+            // Проверка на землю
+            if (player.position.y <= playerRadius) {
+                player.position.y = playerRadius;
+                verticalVelocity = 0;
+                isJumping = false;
+                jumpCount = maxJumps; // Сброс счетчика прыжков при приземлении
+            }
+            
+            // Проверка столкновений со стенами и отскок
+            if (player.position.x < -9) {
+                player.position.x = -9;
+                velocity.x = Math.abs(velocity.x) * bounceForce;
+            }
+            if (player.position.z < -9) {
+                // Проверяем, есть ли задняя стена в текущей комнате
+                const backWalls = roomGroup.children.filter(child => 
+                    child.userData && child.userData.type === 'backWall'
+                );
+                if (backWalls.length > 0) {
+                    player.position.z = -9;
+                    velocity.z = Math.abs(velocity.z) * bounceForce;
+                }
+            }
+            if (player.position.x > 9) {
+                player.position.x = 9;
+                velocity.x = -Math.abs(velocity.x) * bounceForce;
+            }
+            if (player.position.z > 9) {
+                // Проверяем, есть ли передняя стена в текущей комнате
+                const frontWalls = roomGroup.children.filter(child => 
+                    child.userData && child.userData.type === 'frontWall' && child.userData.removable
+                );
+                if (frontWalls.length > 0) {
+                    player.position.z = 9;
+                    velocity.z = -Math.abs(velocity.z) * bounceForce;
+                }
+            }
+            
+            // Вращение мяча в направлении движения (быстрее и в обратную сторону)
+            if (velocity.length() > 0.01) {
+                // Создаем ось вращения (перпендикулярно вектору движения и оси Y)
+                const rotationAxis = new THREE.Vector3();
+                rotationAxis.crossVectors(velocity, new THREE.Vector3(0, 1, 0)).normalize();
+                
+                // Угол вращения пропорционален скорости (увеличили с 0.1 до 0.3)
+                const rotationAngle = -velocity.length() * 0.9; // Отрицательное значение для обратного вращения
+                
+                // Применяем вращение
+                player.rotateOnWorldAxis(rotationAxis, rotationAngle);
+            }
+        }
+
+        function updateCamera() {
+            // Позиция камеры относительно игрока с учетом вращения
+            // Вычисляем целевую позицию камеры
+            const targetPosition = new THREE.Vector3(
+                player.position.x + Math.sin(mouseX) * cameraDistance,
+                player.position.y + cameraHeight + Math.sin(mouseY) * 5,
+                player.position.z - Math.cos(mouseX) * cameraDistance
+            );
+            
+            // Плавное перемещение камеры к целевой позиции
+            camera.position.lerp(targetPosition, 0.1);
+            
+            // Камера всегда смотрит на игрока
+            camera.lookAt(player.position);
+        }
+
+        // Игровые переменные
+        const fruits = [];
+        let collectedFruits = 0;
+        let requiredFruits = 5;
+        let gate = null;
+        let gateTrigger = null;
+        let fruitCounter = null;
+        let roomNumber = 1;
+        let roomGroup = new THREE.Group();
+        scene.add(roomGroup);
+        
+        // Шипы
+        const spikes = [];
+        
+        // Платформы
+        const platforms = [];
+        
+        // Внутренние комнаты
+        const innerRooms = [];
+        const innerWalls = []; // Массив для всех стен внутренних комнат
+        
+        // Усиления
+        const powerUps = [];
+        let activePowerUp = null;
+        let powerUpTimer = 15;
+        let powerUpInterval = null;
+        
+        // Таймер уровня
+        let levelTime = 60; // Начальное время для первой комнаты
+        let timerInterval = null;
+
+        // Функция проверки безопасности позиции
+        function isPositionSafe(position, safeRadius = 1.5) {
+            // Проверяем шипы
+            for (const spike of spikes) {
+                const distance = position.distanceTo(spike.position);
+                if (distance < safeRadius) {
+                    return false;
+                }
+            }
+            // Проверяем стены (чтобы не в стене)
+            if (position.x < -9 + safeRadius || position.x > 9 - safeRadius || 
+                position.z < -9 + safeRadius || position.z > 9 - safeRadius) {
+                return false;
+            }
+            // Проверяем внутренние стены
+            for (const wall of innerWalls) {
+                const wallBox = new THREE.Box3().setFromObject(wall);
+                const playerSphere = new THREE.Sphere(position, playerRadius);
+                if (wallBox.intersectsSphere(playerSphere)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Функция создания фрукта с текстурой
+        function createFruitWithTexture(type) {
+            const fruitGeometry = new THREE.SphereGeometry(0.3, 16, 16);
+            let fruitMaterial;
+            
+            try {
+                let texture;
+                switch(type) {
+                    case 'apple':
+                        texture = textureLoader.load('apple.jpg');
+                        break;
+                    case 'orange':
+                        texture = textureLoader.load('orange.jpg');
+                        break;
+                    case 'pear':
+                        texture = textureLoader.load('pear.jpg');
+                        break;
+                    default:
+                        texture = null;
+                }
+                
+                if (texture) {
+                    fruitMaterial = new THREE.MeshStandardMaterial({ 
+                        map: texture,
+                        roughness: 0.7
+                    });
+                } else {
+                    // Если текстура не загрузилась, используем цвет
+                    let color;
+                    switch(type) {
+                        case 'apple':
+                            color = 0xff0000;
+                            break;
+                        case 'orange':
+                            color = 0xffa500;
+                            break;
+                        case 'pear':
+                            color = 0x00ff00;
+                            break;
+                        default:
+                            color = 0xffffff;
+                    }
+                    fruitMaterial = new THREE.MeshStandardMaterial({ 
+                        color: color,
+                        roughness: 0.7
+                    });
+                }
+            } catch (e) {
+                console.warn(`Failed to load texture for ${type}, using color`);
+                let color;
+                switch(type) {
+                    case 'apple':
+                        color = 0xff0000;
+                        break;
+                    case 'orange':
+                        color = 0xffa500;
+                        break;
+                    case 'pear':
+                        color = 0x00ff00;
+                        break;
+                    default:
+                        color = 0xffffff;
+                }
+                fruitMaterial = new THREE.MeshStandardMaterial({ 
+                    color: color,
+                    roughness: 0.7
+                });
+            }
+            
+            const fruit = new THREE.Mesh(fruitGeometry, fruitMaterial);
+            return fruit;
+        }
+
+        // Функция генерации комнаты
+        function generateRoom() {
+            // Пол с новой текстурой
+            const floorGeometry = new THREE.PlaneGeometry(20, 20);
+            let floorTexture;
+            try {
+                floorTexture = textureLoader.load('plate.jpg');
+            } catch (e) {
+                console.warn('Failed to load floor texture, using default');
+                floorTexture = null;
+            }
+            const floorMaterial = new THREE.MeshStandardMaterial({ 
+                map: floorTexture,
+                roughness: 0.8 
+            });
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            roomGroup.add(floor);
+
+            // Стены
+            let wallTexture;
+            try {
+                wallTexture = textureLoader.load('stone.jpg');
+            } catch (e) {
+                console.warn('Failed to load wall texture, using default');
+                wallTexture = null;
+            }
+            const wallMaterial = new THREE.MeshStandardMaterial({ 
+                map: wallTexture,
+                roughness: 0.9 
+            });
+            const wallHeight = 5;
+            const wallThickness = 0.5;
+
+            // Задняя стена
+            const backWall = new THREE.Mesh(
+                new THREE.BoxGeometry(20, wallHeight, wallThickness),
+                wallMaterial
+            );
+            backWall.position.set(0, wallHeight / 2, -10);
+            backWall.castShadow = true;
+            backWall.receiveShadow = true;
+            backWall.userData = { type: 'backWall' };
+            roomGroup.add(backWall);
+
+            // Передняя стена
+            const frontWall = new THREE.Mesh(
+                new THREE.BoxGeometry(20, wallHeight, wallThickness),
+                wallMaterial
+            );
+            frontWall.position.set(0, wallHeight / 2, 10);
+            frontWall.castShadow = true;
+            frontWall.receiveShadow = true;
+            frontWall.userData = { type: 'frontWall', removable: true };
+            roomGroup.add(frontWall);
+
+            // Боковые стены
+            const leftWall = new THREE.Mesh(
+                new THREE.BoxGeometry(wallThickness, wallHeight, 20),
+                wallMaterial
+            );
+            leftWall.position.set(-10, wallHeight / 2, 0);
+            leftWall.castShadow = true;
+            leftWall.receiveShadow = true;
+            roomGroup.add(leftWall);
+
+            const rightWall = new THREE.Mesh(
+                new THREE.BoxGeometry(wallThickness, wallHeight, 20),
+                wallMaterial
+            );
+            rightWall.position.set(10, wallHeight / 2, 0);
+            rightWall.castShadow = true;
+            rightWall.receiveShadow = true;
+            roomGroup.add(rightWall);
+            
+            // Создаем шипы
+            createSpikes();
+            
+            // Создаем платформы с фруктами
+            createPlatformsWithFruits();
+            
+            // Создаем внутренние комнаты только начиная с 3-й комнаты
+            if (roomNumber >= 3) {
+                createInnerRooms();
+            }
+            
+            // Создаем усиления
+            createPowerUps();
+            
+            // Добавляем фрукты на пол для увеличения количества
+            createFloorFruits();
+            
+            // Проверяем начальную позицию игрока
+            let startPosition = new THREE.Vector3(0, playerRadius, 0);
+            if (!isPositionSafe(startPosition)) {
+                // Ищем безопасную позицию
+                let foundSafePosition = false;
+                for (let attempt = 0; attempt < 100; attempt++) {
+                    const x = (Math.random() - 0.5) * 16; // в пределах комнаты, но не у стен
+                    const z = (Math.random() - 0.5) * 16;
+                    startPosition.set(x, playerRadius, z);
+                    if (isPositionSafe(startPosition)) {
+                        foundSafePosition = true;
+                        break;
+                    }
+                }
+                if (!foundSafePosition) {
+                    // Если не нашли, ставим в центр, но выше (чтобы избежать шипов на полу)
+                    startPosition.set(0, playerRadius + 1, 0);
+                }
+            }
+            player.position.copy(startPosition);
+        }
+
+        // Функция создания фруктов на полу
+        function createFloorFruits() {
+            // Увеличиваем количество фруктов на полу в зависимости от номера комнаты
+            const fruitCount = Math.max(3, roomNumber * 2);
+            const fruitTypes = ['apple', 'orange', 'pear'];
+            
+            for (let i = 0; i < fruitCount; i++) {
+                const type = fruitTypes[Math.floor(Math.random() * fruitTypes.length)];
+                
+                const fruit = createFruitWithTexture(type);
+                fruit.position.set(
+                    (Math.random() - 0.5) * 18,
+                    0.3,
+                    (Math.random() - 0.5) * 18
+                );
+                fruit.castShadow = true;
+                fruit.receiveShadow = true;
+                fruit.userData = { type: type, collected: false };
+                
+                roomGroup.add(fruit);
+                fruits.push(fruit);
+            }
+        }
+
+        // Функция создания шипов
+        function createSpikes() {
+            // Шипы на полу
+            for (let i = 0; i < 5; i++) {
+                const spikeGeometry = new THREE.ConeGeometry(0.2, 0.3, 4);
+                const spikeMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+                const spike = new THREE.Mesh(spikeGeometry, spikeMaterial);
+                
+                let spikePlaced = false;
+                let attempts = 0;
+                
+                while (!spikePlaced && attempts < 10) {
+                    spikePlaced = true;
+                    spike.position.set(
+                        (Math.random() - 0.5) * 18,
+                        0.15,
+                        (Math.random() - 0.5) * 18
+                    );
+                    
+                    // Проверяем, не находится ли шип внутри внутренней комнаты
+                    for (const room of innerRooms) {
+                        if (spike.position.x > room.x - room.width/2 && 
+                            spike.position.x < room.x + room.width/2 &&
+                            spike.position.z > room.z - room.depth/2 && 
+                            spike.position.z < room.z + room.depth/2) {
+                            spikePlaced = false;
+                            break;
+                        }
+                    }
+                    attempts++;
+                }
+                
+                spike.castShadow = true;
+                spike.userData = { 
+                    type: 'spike',
+                    radius: 0.15
+                };
+                
+                roomGroup.add(spike);
+                spikes.push(spike);
+            }
+            
+            // Шипы на стенах
+            for (let i = 0; i < 3; i++) {
+                const spikeGeometry = new THREE.ConeGeometry(0.2, 0.3, 4);
+                const spikeMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+                const spike = new THREE.Mesh(spikeGeometry, spikeMaterial);
+                
+                // Случайно выбираем стену
+                const wall = Math.floor(Math.random() * 3);
+                
+                switch(wall) {
+                    case 0: // Задняя стена
+                        spike.position.set(
+                            (Math.random() - 0.5) * 18,
+                            Math.random() * 4 + 0.5,
+                            -9.75
+                        );
+                        spike.rotation.z = Math.PI / 2;
+                        break;
+                    case 1: // Левая стена
+                        spike.position.set(
+                            -9.75,
+                            Math.random() * 4 + 0.5,
+                            (Math.random() - 0.5) * 18
+                        );
+                        spike.rotation.z = Math.PI / 2;
+                        spike.rotation.y = Math.PI / 2;
+                        break;
+                    case 2: // Правая стена
+                        spike.position.set(
+                            9.75,
+                            Math.random() * 4 + 0.5,
+                            (Math.random() - 0.5) * 18
+                        );
+                        spike.rotation.z = Math.PI / 2;
+                        spike.rotation.y = -Math.PI / 2;
+                        break;
+                }
+                
+                // Проверяем, не находится ли шип внутри внутренней комнаты
+                for (const room of innerRooms) {
+                    if (spike.position.x > room.x - room.width/2 && 
+                        spike.position.x < room.x + room.width/2 &&
+                        spike.position.z > room.z - room.depth/2 && 
+                        spike.position.z < room.z + room.depth/2) {
+                        // Перемещаем шип в другое место
+                        spike.position.set(
+                            (Math.random() - 0.5) * 18,
+                            0.15,
+                            (Math.random() - 0.5) * 18
+                        );
+                        spike.rotation.x = 0;
+                        spike.rotation.z = 0;
+                        spike.rotation.y = 0;
+                        break;
+                    }
+                }
+                
+                spike.castShadow = true;
+                spike.userData = { 
+                    type: 'spike',
+                    radius: 0.15
+                };
+                
+                roomGroup.add(spike);
+                spikes.push(spike);
+            }
+        }
+
+        // Функция создания платформ с фруктами
+        function createPlatformsWithFruits() {
+            // Определяем количество платформ в зависимости от номера комнаты
+            const platformCount = Math.min(3 + roomNumber, 8);
+            
+            for (let i = 0; i < platformCount; i++) {
+                // Создаем платформу
+                const platformGeometry = new THREE.BoxGeometry(
+                    Math.random() * 2 + 2,
+                    0.2,
+                    Math.random() * 2 + 2
+                );
+                
+                let platformTexture;
+                try {
+                    platformTexture = textureLoader.load('wood.jpg');
+                } catch (e) {
+                    console.warn('Failed to load platform texture, using default');
+                    platformTexture = null;
+                }
+                const platformMaterial = new THREE.MeshStandardMaterial({ 
+                    map: platformTexture,
+                    roughness: 0.8 
+                });
+                
+                const platform = new THREE.Mesh(platformGeometry, platformMaterial);
+                
+                // Устанавливаем высоту платформы так, чтобы до нее можно было допрыгнуть
+                const platformHeight = Math.random() * 2 + 1.5;
+                
+                platform.position.set(
+                    (Math.random() - 0.5) * 16,
+                    platformHeight,
+                    (Math.random() - 0.5) * 16
+                );
+                platform.castShadow = true;
+                platform.receiveShadow = true;
+                platform.userData = { type: 'platform' };
+                
+                roomGroup.add(platform);
+                platforms.push(platform);
+                
+                // Создаем фрукт на платформе
+                const fruitTypes = ['apple', 'orange', 'pear'];
+                const type = fruitTypes[Math.floor(Math.random() * fruitTypes.length)];
+                
+                const fruit = createFruitWithTexture(type);
+                fruit.position.set(
+                    platform.position.x,
+                    platform.position.y + 0.3,
+                    platform.position.z
+                );
+                fruit.castShadow = true;
+                fruit.receiveShadow = true;
+                fruit.userData = { type: type, collected: false };
+                
+                roomGroup.add(fruit);
+                fruits.push(fruit);
+            }
+        }
+
+        // Функция создания внутренних комнат
+        function createInnerRooms() {
+            for (let i = 0; i < 2; i++) {
+                const roomWidth = Math.random() * 3 + 3;
+                const roomHeight = 3;
+                const roomDepth = Math.random() * 3 + 3;
+                
+                // Стены внутренней комнаты
+                let innerWallTexture;
+                try {
+                    innerWallTexture = textureLoader.load('stone.jpg');
+                } catch (e) {
+                    console.warn('Failed to load inner wall texture, using default');
+                    innerWallTexture = null;
+                }
+                const wallMaterial = new THREE.MeshStandardMaterial({ 
+                    map: innerWallTexture,
+                    roughness: 0.9 
+                });
+                
+                const wallThickness = 0.2;
+                
+                // Позиция комнаты
+                const roomX = (Math.random() - 0.5) * 12;
+                const roomZ = (Math.random() - 0.5) * 12;
+                
+                // Пол с текстурой травы
+                const floorGeometry = new THREE.PlaneGeometry(roomWidth, roomDepth);
+                let floorTexture;
+                try {
+                    floorTexture = textureLoader.load('grass.jpg');
+                } catch (e) {
+                    console.warn('Failed to load grass texture, using default');
+                    floorTexture = null;
+                }
+                const floorMaterial = new THREE.MeshStandardMaterial({ 
+                    map: floorTexture,
+                    roughness: 0.8 
+                });
+                const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+                floor.rotation.x = -Math.PI / 2;
+                floor.position.set(roomX, 0.1, roomZ);
+                floor.receiveShadow = true;
+                roomGroup.add(floor);
+                
+                // Потолок
+                const ceilingGeometry = new THREE.PlaneGeometry(roomWidth, roomDepth);
+                const ceilingMaterial = new THREE.MeshStandardMaterial({ color: 0x888888 });
+                const ceiling = new THREE.Mesh(ceilingGeometry, ceilingMaterial);
+                ceiling.rotation.x = Math.PI / 2;
+                ceiling.position.set(roomX, roomHeight, roomZ);
+                ceiling.userData = { type: 'innerCeiling' };
+                ceiling.receiveShadow = true;
+                roomGroup.add(ceiling);
+                
+                // Стены
+                // Задняя стена
+                const backWall = new THREE.Mesh(
+                    new THREE.BoxGeometry(roomWidth, roomHeight, wallThickness),
+                    wallMaterial
+                );
+                backWall.position.set(roomX, roomHeight / 2, roomZ - roomDepth / 2);
+                backWall.castShadow = true;
+                backWall.receiveShadow = true;
+                backWall.userData = { 
+                    type: 'innerWall',
+                    roomX: roomX,
+                    roomZ: roomZ,
+                    roomWidth: roomWidth,
+                    roomDepth: roomDepth
+                };
+                roomGroup.add(backWall);
+                innerWalls.push(backWall);
+                
+                // Передняя стена (с аркой)
+                const archWidth = 1.5; // Ширина арки
+                
+                // Левая часть передней стены
+                const frontWallLeft = new THREE.Mesh(
+                    new THREE.BoxGeometry((roomWidth - archWidth) / 2, roomHeight, wallThickness),
+                    wallMaterial
+                );
+                frontWallLeft.position.set(roomX - (roomWidth + archWidth) / 4, roomHeight / 2, roomZ + roomDepth / 2);
+                frontWallLeft.castShadow = true;
+                frontWallLeft.receiveShadow = true;
+                frontWallLeft.userData = { 
+                    type: 'innerWall',
+                    roomX: roomX,
+                    roomZ: roomZ,
+                    roomWidth: roomWidth,
+                    roomDepth: roomDepth
+                };
+                roomGroup.add(frontWallLeft);
+                innerWalls.push(frontWallLeft);
+                
+                // Правая часть передней стены
+                const frontWallRight = new THREE.Mesh(
+                    new THREE.BoxGeometry((roomWidth - archWidth) / 2, roomHeight, wallThickness),
+                    wallMaterial
+                );
+                frontWallRight.position.set(roomX + (roomWidth + archWidth) / 4, roomHeight / 2, roomZ + roomDepth / 2);
+                frontWallRight.castShadow = true;
+                frontWallRight.receiveShadow = true;
+                frontWallRight.userData = { 
+                    type: 'innerWall',
+                    roomX: roomX,
+                    roomZ: roomZ,
+                    roomWidth: roomWidth,
+                    roomDepth: roomDepth
+                };
+                roomGroup.add(frontWallRight);
+                innerWalls.push(frontWallRight);
+                
+                // Верхняя часть передней стены (над аркой)
+                const frontWallTop = new THREE.Mesh(
+                    new THREE.BoxGeometry(roomWidth, roomHeight * 0.3, wallThickness),
+                    wallMaterial
+                );
+                frontWallTop.position.set(roomX, roomHeight * 0.85, roomZ + roomDepth / 2);
+                frontWallTop.castShadow = true;
+                frontWallTop.receiveShadow = true;
+                frontWallTop.userData = { 
+                    type: 'innerWall',
+                    roomX: roomX,
+                    roomZ: roomZ,
+                    roomWidth: roomWidth,
+                    roomDepth: roomDepth
+                };
+                roomGroup.add(frontWallTop);
+                innerWalls.push(frontWallTop);
+                
+                // Боковые стены
+                const leftWall = new THREE.Mesh(
+                    new THREE.BoxGeometry(wallThickness, roomHeight, roomDepth),
+                    wallMaterial
+                );
+                leftWall.position.set(roomX - roomWidth / 2, roomHeight / 2, roomZ);
+                leftWall.castShadow = true;
+                leftWall.receiveShadow = true;
+                leftWall.userData = { 
+                    type: 'innerWall',
+                    roomX: roomX,
+                    roomZ: roomZ,
+                    roomWidth: roomWidth,
+                    roomDepth: roomDepth
+                };
+                roomGroup.add(leftWall);
+                innerWalls.push(leftWall);
+                
+                const rightWall = new THREE.Mesh(
+                    new THREE.BoxGeometry(wallThickness, roomHeight, roomDepth),
+                    wallMaterial
+                );
+                rightWall.position.set(roomX + roomWidth / 2, roomHeight / 2, roomZ);
+                rightWall.castShadow = true;
+                rightWall.receiveShadow = true;
+                rightWall.userData = { 
+                    type: 'innerWall',
+                    roomX: roomX,
+                    roomZ: roomZ,
+                    roomWidth: roomWidth,
+                    roomDepth: roomDepth
+                };
+                roomGroup.add(rightWall);
+                innerWalls.push(rightWall);
+                
+                // Сохраняем информацию о комнате
+                innerRooms.push({
+                    x: roomX,
+                    z: roomZ,
+                    width: roomWidth,
+                    depth: roomDepth,
+                    height: roomHeight
+                });
+                
+                // 50% шанс, что в комнате будет фрукт
+                if (Math.random() > 0.5) {
+                    const fruitTypes = ['apple', 'orange', 'pear'];
+                    const type = fruitTypes[Math.floor(Math.random() * fruitTypes.length)];
+                    
+                    const fruit = createFruitWithTexture(type);
+                    fruit.position.set(
+                        roomX + (Math.random() - 0.5) * (roomWidth - 1),
+                        0.3,
+                        roomZ + (Math.random() - 0.5) * (roomDepth - 1)
+                    );
+                    fruit.castShadow = true;
+                    fruit.receiveShadow = true;
+                    fruit.userData = { type: type, collected: false, inInnerRoom: true };
+                    
+                    roomGroup.add(fruit);
+                    fruits.push(fruit);
+                }
+            }
+        }
+
+        // Функция создания усилений
+        function createPowerUps() {
+            const powerUpTypes = [
+                { type: 'speed', color: 0x00ffff, name: 'Ускорение' },
+                { type: 'grow', color: 0x00ff00, name: 'Увеличение' },
+                { type: 'shrink', color: 0xff00ff, name: 'Уменьшение' }
+            ];
+            
+            for (let i = 0; i < 3; i++) {
+                const type = powerUpTypes[Math.floor(Math.random() * powerUpTypes.length)];
+                
+                const powerUpGeometry = new THREE.CylinderGeometry(0.3, 0.3, 0.1, 16);
+                const powerUpMaterial = new THREE.MeshStandardMaterial({ 
+                    color: type.color,
+                    emissive: type.color,
+                    emissiveIntensity: 0.5
+                });
+                const powerUp = new THREE.Mesh(powerUpGeometry, powerUpMaterial);
+                
+                powerUp.position.set(
+                    (Math.random() - 0.5) * 18,
+                    0.3,
+                    (Math.random() - 0.5) * 18
+                );
+                powerUp.rotation.x = Math.PI / 2;
+                powerUp.castShadow = true;
+                powerUp.receiveShadow = true;
+                powerUp.userData = { 
+                    type: type.type, 
+                    name: type.name,
+                    collected: false
+                };
+                
+                roomGroup.add(powerUp);
+                powerUps.push(powerUp);
+            }
+        }
+
+        // Функция активации усиления
+        function activatePowerUp(type) {
+            // Если уже есть активное усиление, деактивируем его
+            if (activePowerUp) {
+                deactivatePowerUp();
+            }
+            
+            activePowerUp = type;
+            powerUpTimer = 15;
+            
+            // Показываем уведомление
+            showNotification(`Усиление: ${type.name} активировано!`);
+            
+            // Применяем эффекты усиления
+            switch(type.type) {
+                case 'speed':
+                    maxSpeed = 0.4;
+                    break;
+                case 'grow':
+                    player.scale.set(1.5, 1.5, 1.5);
+                    playerRadius = 0.75;
+                    break;
+                case 'shrink':
+                    player.scale.set(0.5, 0.5, 0.5);
+                    playerRadius = 0.25;
+                    break;
+            }
+            
+            // Запускаем таймер
+            if (powerUpInterval) {
+                clearInterval(powerUpInterval);
+            }
+            
+            powerUpInterval = setInterval(() => {
+                powerUpTimer--;
+                
+                if (powerUpTimer <= 0) {
+                    deactivatePowerUp();
+                }
+            }, 1000);
+        }
+
+        // Функция деактивации усиления
+        function deactivatePowerUp() {
+            if (!activePowerUp) return;
+            
+            // Возвращаем стандартные значения
+            switch(activePowerUp.type) {
+                case 'speed':
+                    maxSpeed = 0.2;
+                    break;
+                case 'grow':
+                    player.scale.set(1, 1, 1);
+                    playerRadius = 0.5;
+                    break;
+                case 'shrink':
+                    player.scale.set(1, 1, 1);
+                    playerRadius = 0.5;
+                    break;
+            }
+            
+            activePowerUp = null;
+            
+            if (powerUpInterval) {
+                clearInterval(powerUpInterval);
+                powerUpInterval = null;
+            }
+        }
+
+        // Функция создания текстуры для счетчика фруктов
+        function createFruitCounterTexture(text) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 128;
+            const context = canvas.getContext('2d');
+            
+            context.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            context.fillRect(0, 0, canvas.width, canvas.height);
+            
+            context.font = '40px Arial';
+            context.fillStyle = 'white';
+            context.textAlign = 'center';
+            context.textBaseline = 'middle';
+            context.fillText(text, canvas.width / 2, canvas.height / 2);
+            
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        // Функция создания счетчика фруктов
+        function createFruitCounter() {
+            if (fruitCounter) {
+                roomGroup.remove(fruitCounter);
+            }
+            
+            const counterMaterial = new THREE.MeshBasicMaterial({
+                map: createFruitCounterTexture(`Фрукты: ${collectedFruits}/${requiredFruits}`),
+                transparent: true,
+                side: THREE.DoubleSide
+            });
+            
+            const counterGeometry = new THREE.PlaneGeometry(3, 1.5);
+            fruitCounter = new THREE.Mesh(counterGeometry, counterMaterial);
+            fruitCounter.position.set(0, 3, 9.7);
+            roomGroup.add(fruitCounter);
+        }
+
+        // Функция обновления счетчика фруктов
+        function updateFruitCounter() {
+            if (fruitCounter) {
+                fruitCounter.material.map = createFruitCounterTexture(`Фрукты: ${collectedFruits}/${requiredFruits}`);
+                fruitCounter.material.needsUpdate = true;
+            }
+        }
+
+        // Функция создания ворот
+        function createGate() {
+            // Создаем ворота (только для визуализации)
+            const gateGeometry = new THREE.BoxGeometry(3, 4, 0.5);
+            const gateMaterial = new THREE.MeshStandardMaterial({ color: 0xffd700 });
+            gate = new THREE.Mesh(gateGeometry, gateMaterial);
+            gate.position.set(0, 2, 9.5);
+            gate.visible = false;
+            gate.castShadow = true;
+            gate.receiveShadow = true;
+            gate.userData = { type: 'gate', open: false };
+            roomGroup.add(gate);
+            
+            // Создаем триггер для перехода на следующий уровень
+            const triggerGeometry = new THREE.BoxGeometry(3, 4, 0.5);
+            const triggerMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0xff0000, 
+                transparent: true, 
+                opacity: 0 
+            });
+            gateTrigger = new THREE.Mesh(triggerGeometry, triggerMaterial);
+            gateTrigger.position.set(0, 2, 9.5);
+            gateTrigger.userData = { type: 'gateTrigger', active: false };
+            roomGroup.add(gateTrigger);
+            
+            // Создаем счетчик фруктов
+            createFruitCounter();
+        }
+
+        // Функция открытия ворот
+        function openGate() {
+            // Делаем ворота видимыми и открытыми
+            if (gate) {
+                gate.visible = true;
+                gate.userData.open = true;
+            }
+            
+            // Активируем триггер
+            if (gateTrigger) {
+                gateTrigger.userData.active = true;
+            }
+            
+            // Удаляем счетчик фруктов
+            if (fruitCounter) {
+                roomGroup.remove(fruitCounter);
+                fruitCounter = null;
+            }
+            
+            // Воспроизводим звук открытия ворот
+            if (sounds.open) {
+                playSound(sounds.open);
+            }
+            
+            // Показываем уведомление
+            showNotification("Ворота открыты! Иди в следующую комнату!");
+            
+            console.log("Ворота открыты! Иди в следующую комнату!");
+        }
+
+        // Функция перехода в следующую комнату
+        function nextRoom() {
+            // Сохраняем текущую позицию игрока
+            const savedPlayerPosition = player.position.clone();
+            
+            // Удаляем все объекты из текущей комнаты
+            while(roomGroup.children.length > 0) {
+                roomGroup.remove(roomGroup.children[0]);
+            }
+            
+            // Очищаем массивы
+            fruits.length = 0;
+            spikes.length = 0;
+            platforms.length = 0;
+            innerRooms.length = 0;
+            innerWalls.length = 0;
+            powerUps.length = 0;
+            
+            // Увеличиваем номер комнаты
+            roomNumber++;
+            
+            // Увеличиваем количество необходимых фруктов
+            requiredFruits = Math.min(5 + roomNumber * 2, 20);
+            
+            // Генерируем новую комнату
+            generateRoom();
+            createGate();
+            
+            // Сбрасываем счетчик фруктов
+            collectedFruits = 0;
+            
+            // Восстанавливаем позицию игрока
+            player.position.copy(savedPlayerPosition);
+            if (!isPositionSafe(savedPlayerPosition)) {
+                // Ищем безопасную позицию
+                let foundSafePosition = false;
+                for (let attempt = 0; attempt < 100; attempt++) {
+                    const x = (Math.random() - 0.5) * 16;
+                    const z = (Math.random() - 0.5) * 16;
+                    player.position.set(x, playerRadius, z);
+                    if (isPositionSafe(player.position)) {
+                        foundSafePosition = true;
+                        break;
+                    }
+                }
+                if (!foundSafePosition) {
+                    player.position.set(0, playerRadius + 1, 0);
+                }
+            }
+            
+            prevPosition.copy(player.position);
+            velocity.set(0, 0, 0);
+            verticalVelocity = 0;
+            jumpCount = maxJumps;
+            
+            // Обновление UI
+            updateUI();
+            
+            // Запускаем таймер уровня
+            startLevelTimer();
+            
+            console.log(`Комната ${roomNumber} сгенерирована!`);
+        }
+
+        // Функция запуска таймера уровня
+        function startLevelTimer() {
+            // Останавливаем предыдущий таймер
+            if (timerInterval) {
+                clearInterval(timerInterval);
+            }
+            
+            // Устанавливаем время для комнаты: 60 - (roomNumber-1)*5, но не менее 20
+            levelTime = Math.max(20, 60 - (roomNumber-1)*5);
+            
+            // Запускаем новый таймер
+            timerInterval = setInterval(() => {
+                levelTime--;
+                updateUI();
+                
+                if (levelTime <= 0) {
+                    clearInterval(timerInterval);
+                    gameOver("Время вышло! Ты не успел завершить комнату вовремя.");
+                }
+            }, 1000);
+            
+            updateUI();
+        }
+
+        // Функция обработки проигрыша
+        function gameOver(message = "Вы коснулись шипов и потеряли весь прогресс!") {
+            // Показываем модальное окно
+            document.getElementById('gameOverMessage').textContent = message;
+            document.getElementById('gameOverModal').style.display = 'flex';
+            
+            // Освобождаем курсор мыши
+            if (document.pointerLockElement === document.body) {
+                document.exitPointerLock();
+            }
+            
+            // Останавливаем игру
+            isGameRunning = false;
+            
+            // Останавливаем таймеры
+            if (timerInterval) {
+                clearInterval(timerInterval);
+            }
+            if (powerUpInterval) {
+                clearInterval(powerUpInterval);
+            }
+        }
+
+        // Функция перезапуска игры
+        function restartGame() {
+            // Скрываем модальное окно
+            document.getElementById('gameOverModal').style.display = 'none';
+            
+            // Очищаем текущую комнату
+            while(roomGroup.children.length > 0) {
+                roomGroup.remove(roomGroup.children[0]);
+            }
+            
+            // Очищаем массивы
+            fruits.length = 0;
+            spikes.length = 0;
+            platforms.length = 0;
+            innerRooms.length = 0;
+            innerWalls.length = 0;
+            powerUps.length = 0;
+            
+            // Сбрасываем все параметры игры
+            roomNumber = 1;
+            collectedFruits = 0;
+            requiredFruits = 5;
+            
+            // Сброс усиления и масштаба игрока
+            if (activePowerUp) {
+                deactivatePowerUp();
+            }
+            
+            // Генерация первой комнаты
+            generateRoom();
+            createGate();
+            
+            // Позиция игрока
+            player.position.set(0, playerRadius, 0);
+            prevPosition.copy(player.position);
+            velocity.set(0, 0, 0);
+            verticalVelocity = 0;
+            jumpCount = maxJumps;
+            
+            // Сброс камеры
+            camera.position.set(0, 8, 12);
+            camera.lookAt(0, 0, 0);
+            mouseX = 0;
+            mouseY = 0;
+            cameraDistance = 10;
+            cameraHeight = 8;
+            
+            // Обновление UI
+            updateUI();
+            
+            // Запускаем таймер уровня
+            startLevelTimer();
+            
+            // Запускаем игру
+            isGameRunning = true;
+        }
+
+        // Функция показа уведомлений
+        function showNotification(message) {
+            const notification = document.getElementById('notification');
+            notification.textContent = message;
+            notification.style.display = 'block';
+            
+            setTimeout(() => {
+                notification.style.display = 'none';
+            }, 3000);
+        }
+
+        // Обновление UI
+        function updateUI() {
+            document.getElementById('roomNumber').textContent = roomNumber;
+            document.getElementById('collectedFruits').textContent = collectedFruits;
+            document.getElementById('requiredFruits').textContent = requiredFruits;
+            document.getElementById('timeLeft').textContent = levelTime;
+        }
+
+        // Проверка столкновений со стенами внутренних комнат
+        function checkInnerRoomCollisions() {
+            const playerPos = player.position;
+            const playerSphere = new THREE.Sphere(playerPos, playerRadius);
+
+            innerWalls.forEach(wall => {
+                // Создаем Box3 для стены
+                const wallBox = new THREE.Box3().setFromObject(wall);
+                
+                if (wallBox.intersectsSphere(playerSphere)) {
+                    // Получаем размеры стены
+                    const wallSize = new THREE.Vector3();
+                    wallBox.getSize(wallSize);
+                    const wallCenter = new THREE.Vector3();
+                    wallBox.getCenter(wallCenter);
+
+                    // Вычисляем разницу по каждой оси
+                    const dx = playerPos.x - wallCenter.x;
+                    const dy = playerPos.y - wallCenter.y;
+                    const dz = playerPos.z - wallCenter.z;
+
+                    // Определяем, по какой оси расстояние минимальное (это и есть направление нормали)
+                    const absDx = Math.abs(dx);
+                    const absDy = Math.abs(dy);
+                    const absDz = Math.abs(dz);
+
+                    let min = absDx;
+                    let axis = 'x';
+                    let sign = dx > 0 ? 1 : -1;
+
+                    if (absDy < min) {
+                        min = absDy;
+                        axis = 'y';
+                        sign = dy > 0 ? 1 : -1;
+                    }
+                    if (absDz < min) {
+                        min = absDz;
+                        axis = 'z';
+                        sign = dz > 0 ? 1 : -1;
+                    }
+
+                    // Отталкиваем игрока по этой оси
+                    if (axis === 'x') {
+                        playerPos.x = wallCenter.x + sign * (wallSize.x / 2 + playerRadius);
+                        velocity.x = sign * Math.abs(velocity.x) * bounceForce;
+                    } else if (axis === 'y') {
+                        playerPos.y = wallCenter.y + sign * (wallSize.y / 2 + playerRadius);
+                        velocity.y = sign * Math.abs(velocity.y) * bounceForce;
+                        if (sign < 0) { // если ударились снизу, то это прыжок
+                            isJumping = false;
+                            verticalVelocity = 0;
+                            jumpCount = maxJumps;
+                        }
+                    } else if (axis === 'z') {
+                        playerPos.z = wallCenter.z + sign * (wallSize.z / 2 + playerRadius);
+                        velocity.z = sign * Math.abs(velocity.z) * bounceForce;
+                    }
+                }
+            });
+        }
+
+        // Проверка столкновений
+        function checkCollisions() {
+            const playerBox = new THREE.Box3().setFromObject(player);
+            
+            // Проверка столкновений с шипами
+            spikes.forEach(spike => {
+                // Используем Sphere для более точной коллизии
+                const spikeSphere = new THREE.Sphere(
+                    new THREE.Vector3(spike.position.x, spike.position.y, spike.position.z),
+                    spike.userData.radius || 0.15
+                );
+                
+                if (playerBox.intersectsSphere(spikeSphere)) {
+                    // Воспроизводим звук столкновения с шипом
+                    if (sounds.spike) {
+                        playSound(sounds.spike);
+                    }
+                    gameOver();
+                }
+            });
+            
+            // Проверка столкновений с платформами
+            platforms.forEach(platform => {
+                const platformBox = new THREE.Box3().setFromObject(platform);
+                if (platformBox.intersectsBox(playerBox) && verticalVelocity <= 0 && 
+                    player.position.y > platform.position.y) {
+                    player.position.y = platform.position.y + platform.geometry.parameters.height / 2 + playerRadius;
+                    verticalVelocity = 0;
+                    isJumping = false;
+                    jumpCount = maxJumps; // Сброс счетчика прыжков при приземлении на платформу
+                }
+            });
+            
+            // Проверка столкновений с потолками внутренних комнат
+            innerWalls.forEach(wall => {
+                if (wall.userData.type === 'innerCeiling') {
+                    const ceilingBox = new THREE.Box3().setFromObject(wall);
+                    if (ceilingBox.intersectsBox(playerBox) && verticalVelocity >= 0) {
+                        player.position.y = wall.position.y - wall.geometry.parameters.height / 2 - playerRadius;
+                        verticalVelocity = -verticalVelocity * bounceForce;
+                    }
+                }
+            });
+            
+            // Проверка столкновений с внутренними стенами
+            checkInnerRoomCollisions();
+            
+            // Проверка столкновений с фруктами
+            fruits.forEach((fruit, index) => {
+                if (!fruit.userData.collected) {
+                    const fruitBox = new THREE.Box3().setFromObject(fruit);
+                    if (fruitBox.intersectsBox(playerBox)) {
+                        fruit.userData.collected = true;
+                        roomGroup.remove(fruit);
+                        collectedFruits++;
+                        
+                        // Воспроизводим звук сбора фрукта
+                        if (sounds.collect) {
+                            playSound(sounds.collect);
+                        }
+                        
+                        console.log(`Собран ${fruit.userData.type}! Всего: ${collectedFruits}`);
+                        
+                        // Обновление счетчика фруктов
+                        updateFruitCounter();
+                        
+                        // Обновление UI
+                        updateUI();
+                        
+                        if (collectedFruits >= requiredFruits) {
+                            openGate();
+                        }
+                    }
+                }
+            });
+            
+            // Проверка столкновений с усилениями
+            powerUps.forEach((powerUp, index) => {
+                if (!powerUp.userData.collected) {
+                    const powerUpBox = new THREE.Box3().setFromObject(powerUp);
+                    if (powerUpBox.intersectsBox(playerBox)) {
+                        powerUp.userData.collected = true;
+                        roomGroup.remove(powerUp);
+                        
+                        // Воспроизводим звук улучшения
+                        if (sounds.upgrade) {
+                            playSound(sounds.upgrade);
+                        }
+                        
+                        // Активируем усиление
+                        activatePowerUp({
+                            type: powerUp.userData.type,
+                            name: powerUp.userData.name
+                        });
+                        
+                        console.log(`Собрано усиление ${powerUp.userData.name}!`);
+                    }
+                }
+            });
+        }
+
+        // Проверка перехода через ворота
+        function checkGateTransition() {
+            if (gateTrigger && gateTrigger.userData.active) {
+                const playerBox = new THREE.Box3().setFromObject(player);
+                const triggerBox = new THREE.Box3().setFromObject(gateTrigger);
+                if (playerBox.intersectsBox(triggerBox)) {
+                    nextRoom();
+                }
+            }
+        }
+
+        // Переменная для управления игровым циклом
+        let isGameRunning = true;
+        let prevPosition = new THREE.Vector3();
+
+        // Анимация
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            if (isGameRunning) {
+                updatePlayer();
+                updateCamera();
+                checkCollisions();
+                checkGateTransition();
+            }
+            
+            renderer.render(scene, camera);
+        }
+
+        // Обработчик кнопки перезапуска
+        document.getElementById('restartButton').addEventListener('click', restartGame);
+
+        // Инициализация первой комнаты
+        generateRoom();
+        createGate();
+
+        // Запуск таймера уровня
+        startLevelTimer();
+
+        // Обновление UI
+        updateUI();
+
+        // Запуск анимации
+        animate();
+    </script>
+</body>
+</html>
